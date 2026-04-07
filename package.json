@@ -1,0 +1,10 @@
+{
+  "name": "ghl-leads-to-sheets",
+  "version": "1.0.0",
+  "description": "Weekly GHL leads export to Google Sheets",
+  "dependencies": {
+    "@netlify/functions": "^2.8.0",
+    "google-spreadsheet": "^4.1.4",
+    "google-auth-library": "^9.14.0"
+  }
+}
