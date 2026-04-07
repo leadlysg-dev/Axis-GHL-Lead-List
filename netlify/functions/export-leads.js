@@ -9,7 +9,13 @@ const GOOGLE_SERVICE_ACCOUNT_EMAIL = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
 const GOOGLE_PRIVATE_KEY = (process.env.GOOGLE_PRIVATE_KEY || "").replace(/\\n/gm, "\n");
 const GOOGLE_SPREADSHEET_ID = process.env.GOOGLE_SPREADSHEET_ID;
 
-// ─── Fetch all contacts from GHL with pagination ────────────
+// ─── FILTER SETTINGS ────────────────────────────────────────
+// Only export contacts that have at least one of these tags
+const REQUIRED_TAGS = ["lead form", "disability"];
+// Only export contacts added in the last 7 days
+const DAYS_BACK = 7;
+
+// ─── Fetch contacts from GHL with pagination ────────────────
 async function fetchAllContacts() {
   const allContacts = [];
   let startAfter = null;
@@ -62,7 +68,25 @@ async function fetchAllContacts() {
   return allContacts;
 }
 
-// ─── Write contacts to Google Sheet ─────────────────────────
+// ─── Filter: only tagged leads from the past 7 days ────────
+function filterContacts(contacts) {
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - DAYS_BACK);
+
+  return contacts.filter((c) => {
+    // Check date: must be added within the last 7 days
+    const added = c.dateAdded ? new Date(c.dateAdded) : null;
+    if (!added || added < cutoff) return false;
+
+    // Check tags: must have at least one of the required tags
+    const tags = Array.isArray(c.tags)
+      ? c.tags.map((t) => t.toLowerCase().trim())
+      : [];
+    return REQUIRED_TAGS.some((rt) => tags.includes(rt.toLowerCase()));
+  });
+}
+
+// ─── Write to Google Sheet ──────────────────────────────────
 async function writeToSheet(contacts) {
   const auth = new JWT({
     email: GOOGLE_SERVICE_ACCOUNT_EMAIL,
@@ -77,36 +101,45 @@ async function writeToSheet(contacts) {
   await doc.loadInfo();
   const sheet = doc.sheetsByIndex[0];
 
+  // Clear and set up clean call list headers
   await sheet.clear();
   await sheet.setHeaderRow([
-    "First Name",
-    "Last Name",
+    "Name",
     "Phone",
     "Email",
     "Tags",
-    "Status",
     "Date Added",
-    "Last Updated",
   ]);
 
-  const rows = contacts.map((c) => ({
-    "First Name": c.firstName || "",
-    "Last Name": c.lastName || "",
-    Phone: c.phone || "",
-    Email: c.email || "",
-    Tags: Array.isArray(c.tags) ? c.tags.join(", ") : "",
-    Status: c.contactName || c.type || "",
-    "Date Added": c.dateAdded || "",
-    "Last Updated": c.dateUpdated || "",
-  }));
+  // Format rows — simple cold call list
+  const rows = contacts.map((c) => {
+    const name = [c.firstName, c.lastName].filter(Boolean).join(" ");
+    const tags = Array.isArray(c.tags) ? c.tags.join(", ") : "";
+    let dateAdded = "";
+    if (c.dateAdded) {
+      try {
+        dateAdded = new Date(c.dateAdded).toLocaleDateString("en-US", {
+          month: "short",
+          day: "numeric",
+          year: "numeric",
+        });
+      } catch {
+        dateAdded = c.dateAdded;
+      }
+    }
+    return { Name: name, Phone: c.phone || "", Email: c.email || "", Tags: tags, "Date Added": dateAdded };
+  });
 
-  await sheet.addRows(rows);
+  if (rows.length) {
+    await sheet.addRows(rows);
+  }
   console.log(`Wrote ${rows.length} rows to "${doc.title}"`);
 }
 
 // ─── The handler ────────────────────────────────────────────
 const myHandler = async (event) => {
   console.log(`=== GHL Export running at ${new Date().toISOString()} ===`);
+  console.log(`Filtering for tags: ${REQUIRED_TAGS.join(", ")} | Last ${DAYS_BACK} days`);
 
   const missing = [];
   if (!GHL_API_KEY) missing.push("GHL_API_KEY");
@@ -121,12 +154,21 @@ const myHandler = async (event) => {
   }
 
   try {
-    const contacts = await fetchAllContacts();
-    if (!contacts.length) {
-      return { statusCode: 200, body: "No contacts found" };
+    // 1. Fetch all contacts
+    const allContacts = await fetchAllContacts();
+    console.log(`Total contacts in GHL: ${allContacts.length}`);
+
+    // 2. Filter to only tagged leads from last 7 days
+    const filtered = filterContacts(allContacts);
+    console.log(`Filtered to ${filtered.length} leads (tagged + last ${DAYS_BACK} days)`);
+
+    if (!filtered.length) {
+      return { statusCode: 200, body: "No matching leads this week" };
     }
-    await writeToSheet(contacts);
-    return { statusCode: 200, body: `Exported ${contacts.length} contacts` };
+
+    // 3. Write to Google Sheet
+    await writeToSheet(filtered);
+    return { statusCode: 200, body: `Exported ${filtered.length} leads` };
   } catch (err) {
     console.error("Export failed:", err.message);
     return { statusCode: 500, body: err.message };
