@@ -86,7 +86,7 @@ function filterContacts(contacts) {
   });
 }
 
-// ─── Write to Google Sheet ──────────────────────────────────
+// ─── Write to a NEW tab named with the date period ─────────
 async function writeToSheet(contacts) {
   const auth = new JWT({
     email: GOOGLE_SERVICE_ACCOUNT_EMAIL,
@@ -99,17 +99,20 @@ async function writeToSheet(contacts) {
 
   const doc = new GoogleSpreadsheet(GOOGLE_SPREADSHEET_ID, auth);
   await doc.loadInfo();
-  const sheet = doc.sheetsByIndex[0];
 
-  // Clear and set up clean call list headers
-  await sheet.clear();
-  await sheet.setHeaderRow([
-    "Name",
-    "Phone",
-    "Email",
-    "Tags",
-    "Date Added",
-  ]);
+  // Build tab name like "Apr 1 - Apr 8, 2026"
+  const now = new Date();
+  const weekAgo = new Date();
+  weekAgo.setDate(now.getDate() - DAYS_BACK);
+  const fmt = (d) =>
+    d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  const tabName = `${fmt(weekAgo)} - ${fmt(now)}, ${now.getFullYear()}`;
+
+  // Create new tab
+  const sheet = await doc.addSheet({
+    title: tabName,
+    headerValues: ["Name", "Phone", "Email", "Tags", "Date Added"],
+  });
 
   // Format rows — simple cold call list
   const rows = contacts.map((c) => {
@@ -133,7 +136,7 @@ async function writeToSheet(contacts) {
   if (rows.length) {
     await sheet.addRows(rows);
   }
-  console.log(`Wrote ${rows.length} rows to "${doc.title}"`);
+  console.log(`Created tab "${tabName}" with ${rows.length} leads in "${doc.title}"`);
 }
 
 // ─── The handler ────────────────────────────────────────────
@@ -175,5 +178,5 @@ const myHandler = async (event) => {
   }
 };
 
-// ─── Run every Monday at 7AM UTC ────────────────────────────
-exports.handler = schedule("0 7 * * 1", myHandler);
+// ─── Run every Wednesday at 7AM UTC ─────────────────────────
+exports.handler = schedule("0 7 * * 3", myHandler);
